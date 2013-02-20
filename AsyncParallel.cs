@@ -6,30 +6,28 @@ using System.Threading;
 using System.Threading.Tasks;
 using Nito.AsyncEx;
 
-// http://blogs.msdn.com/b/pfxteam/archive/2012/03/05/10278165.aspx
-// http://stackoverflow.com/questions/14673728/run-async-method-8-times-in-parallel
-// http://stackoverflow.com/questions/14889988/how-can-i-use-where-with-an-async-predicate/14895226#14895226
-
-
 namespace AsyncParallel
 {
     public static class AsyncParallel
     {
         private static readonly ParallelOptions DefaultOptions = new ParallelOptions();
 
-        public static Task ForEach<T>(
-            IEnumerable<T> source, Func<T, Task> body)
+        public static Task ForEach<T>(IEnumerable<T> source, Func<T, Task> body)
         {
             return ForEach(source, DefaultOptions, body);
         }
 
-        public static Task ForEach<T>(
-            IEnumerable<T> source, ParallelOptions options, Func<T, Task> body)
+        public static Task ForEach<T>(IEnumerable<T> source, ParallelOptions options, Func<T, Task> body)
+        {
+            return ForEach(Partitioner.Create(source), options, body);
+        }
+
+        public static Task ForEach<T>(Partitioner<T> source, ParallelOptions options, Func<T, Task> body)
         {
             if (options == null)
                 options = DefaultOptions;
 
-            var partitions = Partitioner.Create(source).GetDynamicPartitions();
+            var partitions = source.GetDynamicPartitions();
             var ev = new AsyncCountdownEvent(1);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(options.CancellationToken);
 
