@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2012
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AsyncParallel", "AsyncParallel.csproj", "{15D5777A-4EB6-4298-AA0A-AEB9D858DC79}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AsyncParallel", "AsyncParallel\AsyncParallel.csproj", "{15D5777A-4EB6-4298-AA0A-AEB9D858DC79}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
