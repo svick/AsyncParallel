@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Nito.AsyncEx;
 
-namespace AsyncParallel
+namespace AsyncEx
 {
     public static class AsyncParallel
     {
@@ -61,6 +61,7 @@ namespace AsyncParallel
             public Func<T, Task> Body { get; private set; }
             public CancellationTokenSource CancellationTokenSource { get; private set; }
             public ConcurrentQueue<Exception> Exceptions { get; private set; }
+            public volatile bool EndPhase;
 
             public ForEachAsyncData(
                 IEnumerable<T> partitions, int maxDegreeOfParallelism, TaskScheduler scheduler,
@@ -79,30 +80,25 @@ namespace AsyncParallel
 
         private static void StartWork<T>(ForEachAsyncData<T> data, int currentParallelism)
         {
+            // the cancellation token cannot be used here, because it would mean
+            // countdown would never reach zero
             Task.Factory.StartNew(
-                () => DoWork(data, currentParallelism - 1), data.CancellationTokenSource.Token,
+                () => DoWork(data, currentParallelism - 1), CancellationToken.None,
                 TaskCreationOptions.None, data.Scheduler);
         }
 
         private static async void DoWork<T>(ForEachAsyncData<T> data, int remainingParallelism)
         {
-            // this is not the first Task
-            if (remainingParallelism != data.MaxDegreeOfParallelism - 1)
-            {
-                if (!data.Countdown.TryAddCount())
-                {
-                    // all other Tasks have finished, which means the work is done
-                    return;
-                }
-            }
-
             try
             {
                 if (data.CancellationTokenSource.Token.IsCancellationRequested)
                     return;
 
-                if (remainingParallelism != 0)
+                if (remainingParallelism != 0 && !data.EndPhase)
+                {
+                    data.Countdown.AddCount();
                     StartWork(data, remainingParallelism);
+                }
 
                 foreach (var item in data.Partitions)
                 {
@@ -111,6 +107,8 @@ namespace AsyncParallel
 
                     await data.Body(item);
                 }
+
+                data.EndPhase = true;
             }
             catch (Exception ex)
             {
