@@ -2,7 +2,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Nito.AsyncEx;
@@ -12,44 +11,30 @@ using Nito.AsyncEx;
 // http://stackoverflow.com/questions/14889988/how-can-i-use-where-with-an-async-predicate/14895226#14895226
 
 
-namespace ConsoleApplication1
+namespace AsyncParallel
 {
-    static class Program
+    public static class AsyncParallel
     {
-        static void Main(string[] args)
-        {
-            var items = Enumerable.Range(0, 100).ToArray();
-
-            var scheduler = TaskScheduler.Default;
-
-            /*ForEachAsync(
-                items, 8, async i =>
-                {
-                    for (int j = 0; j < 20000000; j++)
-                    {}
-                }).Wait();*/
-        }
-
         private static readonly ParallelOptions DefaultOptions = new ParallelOptions();
 
-        public static Task ForEachAsync<T>(
+        public static Task ForEach<T>(
             IEnumerable<T> source, Func<T, Task> body)
         {
-            return ForEachAsync(source, DefaultOptions, body);
+            return ForEach(source, DefaultOptions, body);
         }
 
-        public static Task ForEachAsync<T>(
+        public static Task ForEach<T>(
             IEnumerable<T> source, ParallelOptions options, Func<T, Task> body)
         {
             if (options == null)
                 options = DefaultOptions;
 
-            var partitioner = Partitioner.Create(source);
+            var partitions = Partitioner.Create(source).GetDynamicPartitions();
             var ev = new AsyncCountdownEvent(1);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(options.CancellationToken);
 
             var data = new ForEachAsyncData<T>(
-                partitioner, options.MaxDegreeOfParallelism, options.TaskScheduler, ev, body, cts);
+                partitions, options.MaxDegreeOfParallelism, options.TaskScheduler, ev, body, cts);
 
             StartWork(data, options.MaxDegreeOfParallelism);
 
@@ -71,7 +56,7 @@ namespace ConsoleApplication1
 
         private class ForEachAsyncData<T>
         {
-            public OrderablePartitioner<T> Partitioner { get; private set; }
+            public IEnumerable<T> Partitions { get; private set; }
             public int MaxDegreeOfParallelism { get; private set; }
             public TaskScheduler Scheduler { get; private set; }
             public AsyncCountdownEvent Countdown { get; private set; }
@@ -80,10 +65,10 @@ namespace ConsoleApplication1
             public ConcurrentQueue<Exception> Exceptions { get; private set; }
 
             public ForEachAsyncData(
-                OrderablePartitioner<T> partitioner, int maxDegreeOfParallelism, TaskScheduler scheduler,
+                IEnumerable<T> partitions, int maxDegreeOfParallelism, TaskScheduler scheduler,
                 AsyncCountdownEvent countdown, Func<T, Task> body, CancellationTokenSource cancellationTokenSource)
             {
-                Partitioner = partitioner;
+                Partitions = partitions;
                 MaxDegreeOfParallelism = maxDegreeOfParallelism;
                 Scheduler = scheduler;
                 Countdown = countdown;
@@ -121,17 +106,13 @@ namespace ConsoleApplication1
                 if (remainingParallelism != 0)
                     StartWork(data, remainingParallelism);
 
-                var partition = data.Partitioner.GetDynamicPartitions();
-                foreach (var item in partition)
+                foreach (var item in data.Partitions)
                 {
                     if (data.CancellationTokenSource.IsCancellationRequested)
                         return;
 
                     await data.Body(item);
                 }
-
-                // all work is done cancel any Task waiting to start
-                data.CancellationTokenSource.Cancel();
             }
             catch (Exception ex)
             {
