@@ -39,42 +39,109 @@ namespace ConsoleApplication1
         }
 
         public static Task ForEachAsync<T>(
-            IEnumerable<T> source,
-            ParallelOptions options, Func<T, Task> body)
+            IEnumerable<T> source, ParallelOptions options, Func<T, Task> body)
         {
             if (options == null)
                 options = DefaultOptions;
 
             var partitioner = Partitioner.Create(source);
-
             var ev = new AsyncCountdownEvent(1);
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(options.CancellationToken);
 
-            StartWork(partitioner, options, options.MaxDegreeOfParallelism, ev, body);
+            var data = new ForEachAsyncData<T>(
+                partitioner, options.MaxDegreeOfParallelism, options.TaskScheduler, ev, body, cts);
 
-            return ev.WaitAsync();
+            StartWork(data, options.MaxDegreeOfParallelism);
+
+            var tcs = new TaskCompletionSource();
+
+            ev.WaitAsync().ContinueWith(
+                _ =>
+                {
+                    if (data.Exceptions.Any())
+                        tcs.SetException(data.Exceptions);
+                    else if (options.CancellationToken.IsCancellationRequested)
+                        tcs.SetCanceled();
+                    else
+                        tcs.SetResult();
+                });
+
+            return tcs.Task;
         }
 
-        private static void StartWork<T>(OrderablePartitioner<T> partitioner, ParallelOptions options, int currentParallelism, AsyncCountdownEvent countdown, Func<T, Task> body)
+        private class ForEachAsyncData<T>
+        {
+            public OrderablePartitioner<T> Partitioner { get; private set; }
+            public int MaxDegreeOfParallelism { get; private set; }
+            public TaskScheduler Scheduler { get; private set; }
+            public AsyncCountdownEvent Countdown { get; private set; }
+            public Func<T, Task> Body { get; private set; }
+            public CancellationTokenSource CancellationTokenSource { get; private set; }
+            public ConcurrentQueue<Exception> Exceptions { get; private set; }
+
+            public ForEachAsyncData(
+                OrderablePartitioner<T> partitioner, int maxDegreeOfParallelism, TaskScheduler scheduler,
+                AsyncCountdownEvent countdown, Func<T, Task> body, CancellationTokenSource cancellationTokenSource)
+            {
+                Partitioner = partitioner;
+                MaxDegreeOfParallelism = maxDegreeOfParallelism;
+                Scheduler = scheduler;
+                Countdown = countdown;
+                Body = body;
+                CancellationTokenSource = cancellationTokenSource;
+
+                Exceptions = new ConcurrentQueue<Exception>();
+            }
+        }
+
+        private static void StartWork<T>(ForEachAsyncData<T> data, int currentParallelism)
         {
             Task.Factory.StartNew(
-                () => DoWork(partitioner, options, currentParallelism - 1, countdown, body), options.CancellationToken,
-                TaskCreationOptions.None, options.TaskScheduler);
+                () => DoWork(data, currentParallelism - 1), data.CancellationTokenSource.Token,
+                TaskCreationOptions.None, data.Scheduler);
         }
 
-        private static async void DoWork<T>(
-            OrderablePartitioner<T> partitioner, ParallelOptions options, int remainingParallelism, AsyncCountdownEvent countdown, Func<T, Task> body)
+        private static async void DoWork<T>(ForEachAsyncData<T> data, int remainingParallelism)
         {
-            if (remainingParallelism != 0)
+            // this is not the first Task
+            if (remainingParallelism != data.MaxDegreeOfParallelism - 1)
             {
-                countdown.AddCount();
-                StartWork(partitioner, options, remainingParallelism, countdown, body);
+                if (!data.Countdown.TryAddCount())
+                {
+                    // all other Tasks have finished, which means the work is done
+                    return;
+                }
             }
 
-            var partition = partitioner.GetDynamicPartitions();
-            foreach (var item in partition)
+            try
             {
-                await body(item);
-                // TODO: cancellation, exceptions
+                if (data.CancellationTokenSource.Token.IsCancellationRequested)
+                    return;
+
+                if (remainingParallelism != 0)
+                    StartWork(data, remainingParallelism);
+
+                var partition = data.Partitioner.GetDynamicPartitions();
+                foreach (var item in partition)
+                {
+                    if (data.CancellationTokenSource.IsCancellationRequested)
+                        return;
+
+                    await data.Body(item);
+                }
+
+                // all work is done cancel any Task waiting to start
+                data.CancellationTokenSource.Cancel();
+            }
+            catch (Exception ex)
+            {
+                // break other Tasks
+                data.CancellationTokenSource.Cancel();
+                data.Exceptions.Enqueue(ex);
+            }
+            finally
+            {
+                data.Countdown.Signal();
             }
         }
     }
