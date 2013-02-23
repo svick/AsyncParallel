@@ -11,7 +11,20 @@ namespace AsyncEx.Tests
     public class AsyncParallelTests
     {
         [TestMethod]
-        public async Task ProcessesEverythingTest()
+        public async Task ProcessesEverythingSyncTest()
+        {
+            var source = Enumerable.Range(1, 100);
+
+            int sum = 0;
+
+            await AsyncParallel.ForEach(
+                source, async i => Interlocked.Add(ref sum, i));
+
+            Assert.AreEqual(5050, sum);
+        }
+
+        [TestMethod]
+        public async Task ProcessesEverythingAsyncTest()
         {
             var source = Enumerable.Range(1, 100);
 
@@ -25,6 +38,38 @@ namespace AsyncEx.Tests
                 });
 
             Assert.AreEqual(5050, sum);
+        }
+
+        [TestMethod]
+        public async Task SerialSyncNotTaskExceptionTest()
+        {
+            var source = new[] { true, false };
+
+            int ran = 0;
+
+            var exception = new Exception();
+            try
+            {
+                await AsyncParallel.ForEach(
+                    source, new ParallelOptions { MaxDegreeOfParallelism = 1 },
+                    b =>
+                    {
+                        if (b)
+                            throw exception;
+
+                        Interlocked.Increment(ref ran);
+                        return Task.FromResult(true);
+                    });
+                Assert.Fail();
+            }
+            catch (Exception e)
+            {
+                Assert.AreEqual(exception, e);
+            }
+            finally
+            {
+                Assert.AreEqual(0, ran);
+            }
         }
 
         [TestMethod]
